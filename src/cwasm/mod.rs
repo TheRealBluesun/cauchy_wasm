@@ -96,6 +96,7 @@ struct Function {
 pub struct CWasm {
     functions: Vec<Function>,
     exports: Vec<Export>,
+    codes: Vec<Vec<u8>>,
 }
 
 impl CWasm {
@@ -109,7 +110,10 @@ impl CWasm {
         let version = cur
             .read_u32::<LittleEndian>()
             .expect("Failed to parse version");
-        // Then read the first section ID
+        let mut functions = Vec::new();
+        let mut exports = Vec::new();
+        let mut codes = Vec::new();
+        // Then read the sections
         while let Ok(id_byte) = cur.read_u8() {
             let id = SectionID::from_u8(id_byte);
             let section_size = leb128::read::unsigned(&mut cur)
@@ -118,16 +122,16 @@ impl CWasm {
             println!("found section {:?} ({:X})", id, id_byte);
             match id {
                 SectionID::TypeSection => {
-                    CWasm::parse_section_type(&mut cur, section_size);
+                    functions = CWasm::parse_section_type(&mut cur, section_size);
                 }
                 SectionID::FunctionSection => {
                     CWasm::parse_section_function(&mut cur, section_size);
                 }
                 SectionID::ExportSection => {
-                    CWasm::parse_section_export(&mut cur, section_size);
+                    exports = CWasm::parse_section_export(&mut cur, section_size);
                 }
                 SectionID::CodeSection => {
-                    CWasm::parse_section_code(&mut cur, section_size);
+                    codes = CWasm::parse_section_code(&mut cur, section_size);
                 }
                 _ => {
                     println!("No method to parse section {:?}", id);
@@ -142,8 +146,9 @@ impl CWasm {
             .expect("Could not read unparsed data");
         println!("Buff left: {}", hex::encode(remaining));
         CWasm {
-            functions: Vec::new(),
-            exports: Vec::new(),
+            functions,
+            exports,
+            codes,
         }
     }
 
@@ -190,6 +195,9 @@ impl CWasm {
         functions
     }
 
+    // The function section has the id 3. It decodes into a vector of type indices that represent
+    // the type fields of the functions in the funcs component of a module. The locals and body fields
+    // of the respective functions are encoded separately in the code section.
     fn parse_section_function(cur: &mut Cursor<&[u8]>, size: usize) -> Vec<u32> {
         println!("\tsection Function is {} bytes", size);
         let mut retvec = Vec::<u32>::with_capacity(size);
@@ -198,9 +206,11 @@ impl CWasm {
                 leb128::read::unsigned(cur).expect("could not get index in func section") as u32;
             retvec.push(idx);
         }
+        println!("\t{:X?}", &retvec);
         retvec
     }
 
+    // The export section has the id 7. It decodes into a vector of exports that represent the exports component of a module.
     fn parse_section_export(cur: &mut Cursor<&[u8]>, size: usize) -> Vec<Export> {
         println!("\tsection Export is {} bytes", size);
         let num_entries = leb128::read::unsigned(cur).expect("could not get number of exports");
@@ -216,9 +226,13 @@ impl CWasm {
         exports
     }
 
-    fn parse_section_code(cur: &mut Cursor<&[u8]>, size: usize) {
+    // The code section has the id 10. It decodes into a vector of code entries that are pairs of value type vectors
+    // and expressions. They represent the locals and body field of the functions in the funcs component of a module.
+    // The type fields of the respective functions are encoded separately in the function section.
+    fn parse_section_code(cur: &mut Cursor<&[u8]>, size: usize) -> Vec<Vec<u8>> {
         println!("\tsection Code is {} bytes", size);
-        let num_codes = leb128::read::unsigned(cur).expect("could not get code size");
+        let num_codes = leb128::read::unsigned(cur).expect("could not get code size") as usize;
+        let mut retvec = Vec::<Vec<u8>>::with_capacity(num_codes);
         for _ in 0..num_codes {
             let code_size = leb128::read::unsigned(cur).expect("could not get code size") as usize;
             // let num_locals = leb128::read::unsigned(cur).expect("could not get numlocals") as usize;
@@ -230,8 +244,9 @@ impl CWasm {
             let mut code = vec![0u8; code_size];
             cur.read_exact(&mut code)
                 .expect("unable to read code from code section");
-            println!("{:X?}", code);
+            retvec.push(code);
         }
+        retvec
     }
 
     fn read_str(cur: &mut Cursor<&[u8]>) -> String {
