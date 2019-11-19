@@ -11,5 +11,6 @@ fn main() {
     let mut buff = Vec::new();
     f.read_to_end(&mut buff).expect("Could not read file");
     println!("Read wasm file with size {}", buff.len());
-    CWasm::parse_wasm(&buff);
+    let c = CWasm::parse_wasm(&buff);
+    println!("{:?}", c);
 }

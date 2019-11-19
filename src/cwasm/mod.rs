@@ -2,6 +2,7 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use hex::encode;
 use leb128::*;
 use std::io::{prelude::*, Cursor};
+mod vm;
 
 #[derive(Debug)]
 enum SectionID {
@@ -82,25 +83,33 @@ impl ExportDesc {
     }
 }
 
+#[derive(Debug)]
 struct Export {
     name: String,
     desc: ExportDesc,
     idx: u32,
 }
 
-struct Function {
+#[derive(Debug)]
+struct FunctionSig {
     params: Vec<ValueType>,
     returns: Vec<ValueType>,
 }
 
+#[derive(Debug)]
 pub struct CWasm {
-    functions: Vec<Function>,
+    functionsigs: Vec<FunctionSig>,
+    functions: Vec<u32>,
     exports: Vec<Export>,
     codes: Vec<Vec<u8>>,
     sections: Vec<SectionID>,
 }
 
 impl CWasm {
+    pub fn run(&mut self) {
+
+    }
+
     pub fn parse_wasm(binfile: &[u8]) -> CWasm {
         let mut cur = Cursor::new(binfile);
         // First read the magic bytes and assert
@@ -110,6 +119,7 @@ impl CWasm {
         let _version = cur
             .read_u32::<LittleEndian>()
             .expect("Failed to parse version");
+        let mut functionsigs = Vec::new();
         let mut functions = Vec::new();
         let mut exports = Vec::new();
         let mut codes = Vec::new();
@@ -125,10 +135,10 @@ impl CWasm {
             println!("found section {:?} ({:X})", sections.last().unwrap(), id_byte);
             match sections.last().unwrap() {
                 SectionID::TypeSection => {
-                    functions = CWasm::parse_section_type(&mut cur, section_size);
+                    functionsigs = CWasm::parse_section_type(&mut cur, section_size);
                 }
                 SectionID::FunctionSection => {
-                    CWasm::parse_section_function(&mut cur, section_size);
+                    functions = CWasm::parse_section_function(&mut cur, section_size);
                 }
                 SectionID::ExportSection => {
                     exports = CWasm::parse_section_export(&mut cur, section_size);
@@ -148,7 +158,9 @@ impl CWasm {
         cur.read_to_end(&mut remaining)
             .expect("Could not read unparsed data");
         println!("Buff left: {}", hex::encode(remaining));
+        
         CWasm {
+            functionsigs,
             functions,
             exports,
             codes,
@@ -158,12 +170,12 @@ impl CWasm {
 
     // The type section has the id 1. It decodes into a vector of function types
     // that represent the types component of a module.
-    fn parse_section_type(cur: &mut Cursor<&[u8]>, size: usize) -> Vec<Function> {
+    fn parse_section_type(cur: &mut Cursor<&[u8]>, size: usize) -> Vec<FunctionSig> {
         println!("\tsection Type is {} bytes", size);
         let num_functions =
             leb128::read::unsigned(cur).expect("could not get numfuncs in Type section");
-        println!("\tsection Type contains {} functions", num_functions);
-        let mut functions = Vec::<Function>::with_capacity(num_functions as usize);
+        println!("\tsection Type contains {} functionsigs", num_functions);
+        let mut functionsigs = Vec::<FunctionSig>::with_capacity(num_functions as usize);
         for _ in 0..num_functions {
             let func_byte = cur.read_u8().unwrap();
             if func_byte == 0x60 {
@@ -189,27 +201,30 @@ impl CWasm {
                         ret_type
                     );
                 }
-                functions.push(Function { params, returns });
+                functionsigs.push(FunctionSig { params, returns });
             } else {
                 println!("Encountered invalid func byte {}", func_byte);
                 break;
             }
         }
-        functions
+        functionsigs
     }
 
     // The function section has the id 3. It decodes into a vector of type indices that represent
-    // the type fields of the functions in the funcs component of a module. The locals and body fields
-    // of the respective functions are encoded separately in the code section.
+    // the type fields of the functionsigs in the funcs component of a module. The locals and body fields
+    // of the respective functionsigs are encoded separately in the code section.
     fn parse_section_function(cur: &mut Cursor<&[u8]>, size: usize) -> Vec<u32> {
         println!("\tsection Function is {} bytes", size);
-        let mut retvec = Vec::<u32>::with_capacity(size);
-        for _ in 0..size {
+        let num_functions = leb128::read::unsigned(cur).expect("could not get number of functionsigs") as usize;
+        let mut retvec = Vec::<u32>::with_capacity(num_functions);
+        for _ in 0..num_functions {
             let idx =
                 leb128::read::unsigned(cur).expect("could not get index in func section") as u32;
+            // This means that function at revec's current index uses function signature idx
+            // declared in the Types section (0x01)
             retvec.push(idx);
+            println!("\tfunction at index {} uses signature at idx {:X?}", retvec.len()-1, idx);
         }
-        println!("\t{:X?}", &retvec);
         retvec
     }
 
@@ -224,14 +239,15 @@ impl CWasm {
             let export_desc = cur.read_u8().unwrap();
             let desc = ExportDesc::from_u8(export_desc);
             let idx = leb128::read::unsigned(cur).expect("could not get export idx") as u32;
+            println!("\t\texport {}: name:{} desc:{:?} idx:{}", exports.len(),name, &desc, idx);
             exports.push(Export { name, desc, idx });
         }
         exports
     }
 
     // The code section has the id 10. It decodes into a vector of code entries that are pairs of value type vectors
-    // and expressions. They represent the locals and body field of the functions in the funcs component of a module.
-    // The type fields of the respective functions are encoded separately in the function section.
+    // and expressions. They represent the locals and body field of the functionsigs in the funcs component of a module.
+    // The type fields of the respective functionsigs are encoded separately in the function section.
     fn parse_section_code(cur: &mut Cursor<&[u8]>, size: usize) -> Vec<Vec<u8>> {
         println!("\tsection Code is {} bytes", size);
         let num_codes = leb128::read::unsigned(cur).expect("could not get code size") as usize;
