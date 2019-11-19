@@ -1,9 +1,9 @@
 mod cwasm;
 
 // use wabt::{wat2wasm, wasm2wat};
-use cwasm::CWasm;
+use cwasm::{vm, CWasm};
 use std::fs::File;
-use std::io::{prelude::*};
+use std::io::prelude::*;
 
 fn main() {
     let fname = "toys/math.wasm";
@@ -13,4 +13,6 @@ fn main() {
     println!("Read wasm file with size {}", buff.len());
     let c = CWasm::parse_wasm(&buff);
     println!("{:?}", c);
+    let mut vm = cwasm::vm::VM::new();
+    vm.run(&c);
 }

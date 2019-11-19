@@ -2,7 +2,7 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use hex::encode;
 use leb128::*;
 use std::io::{prelude::*, Cursor};
-mod vm;
+pub mod vm;
 
 #[derive(Debug)]
 enum SectionID {
@@ -43,20 +43,20 @@ impl SectionID {
 
 #[derive(Debug)]
 enum ValueType {
-    F64 = 0x7C,
-    F32 = 0x7D,
-    I64 = 0x7E,
-    I32 = 0x7F,
+    F64 { val: f64 },
+    F32 { val: f32 },
+    I64 { val: i64 },
+    I32 { val: i32 },
     Invalid,
 }
 
 impl ValueType {
     fn from_u8(value: u8) -> ValueType {
         match value {
-            0x7C => ValueType::F64,
-            0x7D => ValueType::F32,
-            0x7E => ValueType::I64,
-            0x7F => ValueType::I32,
+            0x7C => ValueType::F64 { val: 0f64 },
+            0x7D => ValueType::F32 { val: 0f32 },
+            0x7E => ValueType::I64 { val: 0i64 },
+            0x7F => ValueType::I32 { val: 0i32 },
             _ => ValueType::Invalid,
         }
     }
@@ -106,9 +106,7 @@ pub struct CWasm {
 }
 
 impl CWasm {
-    pub fn run(&mut self) {
-
-    }
+    pub fn run(&mut self) {}
 
     pub fn parse_wasm(binfile: &[u8]) -> CWasm {
         let mut cur = Cursor::new(binfile);
@@ -132,7 +130,11 @@ impl CWasm {
             let section_size = leb128::read::unsigned(&mut cur)
                 .expect("could not get section size in section")
                 as usize;
-            println!("found section {:?} ({:X})", sections.last().unwrap(), id_byte);
+            println!(
+                "found section {:?} ({:X})",
+                sections.last().unwrap(),
+                id_byte
+            );
             match sections.last().unwrap() {
                 SectionID::TypeSection => {
                     functionsigs = CWasm::parse_section_type(&mut cur, section_size);
@@ -158,13 +160,13 @@ impl CWasm {
         cur.read_to_end(&mut remaining)
             .expect("Could not read unparsed data");
         println!("Buff left: {}", hex::encode(remaining));
-        
+
         CWasm {
             functionsigs,
             functions,
             exports,
             codes,
-            sections
+            sections,
         }
     }
 
@@ -215,7 +217,8 @@ impl CWasm {
     // of the respective functionsigs are encoded separately in the code section.
     fn parse_section_function(cur: &mut Cursor<&[u8]>, size: usize) -> Vec<u32> {
         println!("\tsection Function is {} bytes", size);
-        let num_functions = leb128::read::unsigned(cur).expect("could not get number of functionsigs") as usize;
+        let num_functions =
+            leb128::read::unsigned(cur).expect("could not get number of functionsigs") as usize;
         let mut retvec = Vec::<u32>::with_capacity(num_functions);
         for _ in 0..num_functions {
             let idx =
@@ -223,7 +226,11 @@ impl CWasm {
             // This means that function at revec's current index uses function signature idx
             // declared in the Types section (0x01)
             retvec.push(idx);
-            println!("\tfunction at index {} uses signature at idx {:X?}", retvec.len()-1, idx);
+            println!(
+                "\tfunction at index {} uses signature at idx {:X?}",
+                retvec.len() - 1,
+                idx
+            );
         }
         retvec
     }
@@ -239,7 +246,13 @@ impl CWasm {
             let export_desc = cur.read_u8().unwrap();
             let desc = ExportDesc::from_u8(export_desc);
             let idx = leb128::read::unsigned(cur).expect("could not get export idx") as u32;
-            println!("\t\texport {}: name:{} desc:{:?} idx:{}", exports.len(),name, &desc, idx);
+            println!(
+                "\t\texport {}: name:{} desc:{:?} idx:{}",
+                exports.len(),
+                name,
+                &desc,
+                idx
+            );
             exports.push(Export { name, desc, idx });
         }
         exports
